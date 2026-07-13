@@ -1,0 +1,402 @@
+// Run with: npm test  (or) node test/local-harness.js
+// Loads the plugin against a bot-faithful mock ctx (test/mock-ctx.js), then
+// exercises each registered command with a fake interaction. This is the
+// STARTING POINT — copy the pattern and add assertions for your own commands,
+// events, and models. No running bot or MongoDB required.
+
+const assert = require("node:assert");
+const { load } = require("../index.js");
+const { createMockCtx } = require("./mock-ctx");
+
+// Minimal fake interaction. Add the option getters / fields your command reads.
+function fakeInteraction(options = {}) {
+  const replies = [];
+  return {
+    guildId: options._guildId ?? "test-guild",
+    user: options._user ?? { id: "test-user" },
+    member: options._member ?? { id: "test-user", user: { username: "testuser" }, guild: { id: "test-guild" } },
+    options: {
+      getString: (name) => options[name] ?? null,
+      getInteger: (name) => options[name] ?? null,
+      getUser: (name) => options[name] ?? null,
+      getChannel: (name) => options[name] ?? null,
+      getBoolean: (name) => options[name] ?? null,
+      getSubcommand: () => options._subcommand ?? null,
+    },
+    reply: async (payload) => {
+      replies.push(payload);
+      return payload;
+    },
+    replies,
+  };
+}
+
+async function main() {
+  // Mock node-cron to capture the cron callback for testing
+  const nodeCron = require("node-cron");
+  const originalSchedule = nodeCron.schedule;
+  let cronCallback = null;
+  nodeCron.schedule = (cronTime, callback) => {
+    cronCallback = callback;
+    // Return a mock job object with stop method
+    return { stop: () => {} };
+  };
+
+  // createMockCtx returns the frozen `ctx` (what the bot hands your plugin)
+  // plus test-only handles: registeredCommands, registeredEvents, emitEvent,
+  // models, pluginConfigs, hooks. See test/mock-ctx.js.
+  const { ctx, registeredCommands } = createMockCtx({
+    pluginName: "adb-plugin-tempvoice",
+  });
+
+  await load(ctx);
+
+  // Restore original nodeCron.schedule after load (optional, but good practice)
+  nodeCron.schedule = originalSchedule;
+
+  // 1. Command registration: assert the exact set of 11 commands is registered
+  const expectedCommands = new Set([
+    "setup",
+    "setup-category",
+    "name",
+    "limit",
+    "lock",
+    "unlock",
+    "permit",
+    "deny",
+    "claim",
+    "rename",
+    "bitrate",
+     // keep ping for testing
+  ]);
+  assert.ok(
+    registeredCommands.size === expectedCommands.size &&
+      [...registeredCommands.keys()].every((cmd) => expectedCommands.has(cmd)),
+    `Expected exactly ${Array.from(expectedCommands).join(", ")} commands, got ${Array.from(
+      registeredCommands.keys()
+    ).join(", ")}`
+  );
+
+  // Helper to assert command replies
+  const assertReply = (interaction, expectedContent, options = {}) => {
+    const reply = interaction.replies.shift();
+    assert.ok(reply, "Expected a reply");
+    if (typeof expectedContent === "string") {
+      assert.strictEqual(reply.content, expectedContent, `Expected content: ${expectedContent}`);
+    } else if (expectedContent instanceof Object) {
+      // Deep check for embeds or complex objects
+      assert.deepStrictEqual(reply, expectedContent, `Expected reply object`);
+    }
+    if (options.ephemeral !== undefined) {
+      assert.strictEqual(reply.ephemeral, options.ephemeral, "Expected ephemeral flag");
+    }
+  };
+
+  // 2. Test each command's argument parsing, validation, persistence, and replies
+  const guildId = "test-guild";
+  const userId = "test-user";
+
+  // Setup command
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      creationChannel: { id: "voice123", type: 2 }, // voice channel
+      category: { id: "cat456", type: 15 }, // category
+      "name-template": "{username}'s room",
+      "max-channels": 5,
+      bitrate: 64000,
+      "user-limit": 2,
+    });
+    await registeredCommands.get("setup").execute(interaction);
+    assertReply(
+      interaction,
+      { content: "✅ Temporary Voice Setup Updated", embeds: Array.isArray(interaction.replies[0]?.embeds) ? interaction.replies[0].embeds : [] },
+      { ephemeral: true }
+    );
+    // Check that config was updated
+    const config = await ctx.db.getPluginConfig(guildId, "adb-plugin-tempvoice");
+    assert.ok(config.data.creationChannelId === "voice123");
+    assert.ok(config.data.categoryId === "cat456");
+    assert.ok(config.data.nameTemplate === "{username}'s room");
+    assert.ok(config.data.autoDeleteDelay === 10);
+    assert.ok(config.data.maxChannels === 5);
+    assert.ok(config.data.bitrateDefault === 64000);
+    assert.ok(config.data.userLimitDefault === 2);
+    assert.ok(config.data.creatorId === userId);
+  }
+
+  // Setup-category command (subcommand of setup? Actually it's a separate command)
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      category: { id: "cat789", type: 15 },
+    });
+    await registeredCommands.get("setup-category").execute(interaction);
+    assertReply(interaction, { content: "✅ Category set", ephemeral: true }); // Adjust based on actual reply
+    const config = await ctx.db.getPluginConfig(guildId, "adb-plugin-tempvoice");
+    assert.ok(config.data.categoryId === "cat789");
+  }
+
+  // Name command
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      template: "{user}'s channel",
+    });
+    await registeredCommands.get("name").execute(interaction);
+    assertReply(interaction, { content: "✅ Name Template Updated", ephemeral: true });
+    const config = await ctx.db.getPluginConfig(guildId, "adb-plugin-tempvoice");
+    assert.ok(config.data.nameTemplate === "{user}'s channel");
+  }
+
+  // Limit command (assuming it's a subcommand of setup? Actually it's a separate command)
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      limit: 5,
+    });
+    await registeredCommands.get("limit").execute(interaction);
+    assertReply(interaction, { content: "✅ User limit set", ephemeral: true });
+    const config = await ctx.db.getPluginConfig(guildId, "adb-plugin-tempvoice");
+    assert.ok(config.data.userLimitDefault === 5);
+  }
+
+  // Lock command
+  {
+    // First, we need a temp voice channel in the DB to lock
+    const TempVoiceChannelModel = ctx.models.get("plugin_adb-plugin-tempvoice_TempVoiceChannel");
+    await TempVoiceChannelModel.create({
+      guildId,
+      channelId: "channel123",
+      creatorId: userId,
+      locked: false,
+    });
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      channel: { id: "channel123", type: 2, locked: false },
+      lock: true,
+    });
+    await registeredCommands.get("lock").execute(interaction);
+    assertReply(interaction, { content: "🔒 Locked — channel123", ephemeral: true }); // Adjust based on actual reply
+    const channelDoc = await TempVoiceChannelModel.findOne({ channelId: "channel123" });
+    assert.ok(channelDoc.locked === true);
+  }
+
+  // Unlock command
+  {
+    const TempVoiceChannelModel = ctx.models.get("plugin_adb-plugin-tempvoice_TempVoiceChannel");
+    await TempVoiceChannelModel.create({
+      guildId,
+      channelId: "channel456",
+      creatorId: userId,
+      locked: true,
+    });
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      channel: { id: "channel456", type: 2, locked: true },
+      lock: false,
+    });
+    await registeredCommands.get("unlock").execute(interaction);
+    assertReply(interaction, { content: "🔓 Unlocked — channel456", ephemeral: true });
+    const channelDoc = await TempVoiceChannelModel.findOne({ channelId: "channel456" });
+    assert.ok(channelDoc.locked === false);
+  }
+
+  // Permit command
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      target: { id: "target123" }, // user or role to permit
+    });
+    await registeredCommands.get("permit").execute(interaction);
+    assertReply(interaction, { content: "✅ Permissions updated", ephemeral: true });
+    // We would need to check permission overwrites, but mock channels don't have that.
+    // At least ensure no error.
+  }
+
+  // Deny command
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      target: { id: "target456" },
+    });
+    await registeredCommands.get("deny").execute(interaction);
+    assertReply(interaction, { content: "✅ Permissions updated", ephemeral: true });
+  }
+
+  // Claim command
+  {
+    const TempVoiceChannelModel = ctx.models.get("plugin_adb-plugin-tempvoice_TempVoiceChannel");
+    await TempVoiceChannelModel.create({
+      guildId,
+      channelId: "channel789",
+      creatorId: "otheruser",
+      locked: false,
+    });
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      channel: { id: "channel789", type: 2 },
+    });
+    await registeredCommands.get("claim").execute(interaction);
+    assertReply(interaction, { content: "✅ Claimed channel", ephemeral: true });
+    const channelDoc = await TempVoiceChannelModel.findOne({ channelId: "channel789" });
+    assert.ok(channelDoc.creatorId === userId);
+  }
+
+  // Rename command
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      name: "New Channel Name",
+    });
+    await registeredCommands.get("rename").execute(interaction);
+    assertReply(interaction, { content: "✅ Channel renamed", ephemeral: true });
+    // Would need to check channel name via mock, but skip for now.
+  }
+
+  // Bitrate command
+  {
+    const interaction = fakeInteraction({
+      _guildId: guildId,
+      _user: { id: userId },
+      _member: { id: userId, user: { username: "testuser" }, guild: { id: guildId } },
+      bitrate: 96000,
+    });
+    await registeredCommands.get("bitrate").execute(interaction);
+    assertReply(interaction, { content: "✅ Bitrate set", ephemeral: true });
+    const config = await ctx.db.getPluginConfig(guildId, "adb-plugin-tempvoice");
+    assert.ok(config.data.bitrateDefault === 96000);
+  }
+
+  // 3. Persistence (models) - already tested above via config and channel doc checks
+
+  // 4. voiceStateUpdate simulation
+  {
+    // Simulate user joining creation channel -> channel creation
+    const TempVoiceChannelModel = ctx.models.get("plugin_adb-plugin-tempvoice_TempVoiceChannel");
+    const TempVoiceConfig = ctx.models.get("plugin_adb-plugin-tempvoice_TempVoiceConfig");
+
+    // Set up config with a creation channel
+    await TempVoiceConfig.create({
+      guildId,
+      creationChannelId: "create123",
+      nameTemplate: "{username}'s space",
+      categoryId: "cat111",
+      bitrateDefault: 64000,
+      userLimitDefault: 0,
+      autoDeleteDelay: 30,
+    });
+
+    // Mock guild and channel creation
+    const guild = {
+      id: guildId,
+      channels: {
+        create: async (name, options) => {
+          return {
+            id: "newchannel1",
+            name,
+            parent: options.parent,
+            permissionOverwrites: {
+              edit: async (overwrites) => {
+                return {};
+              },
+            },
+          };
+        },
+      },
+    };
+    // Replace ctx.client.guilds.cache.get with a mock that returns our guild
+    const originalGet = ctx.client.guilds.cache.get;
+    ctx.client.guilds.cache.get = (id) => (id === guildId ? guild : null);
+
+    const oldState = { channelId: null };
+    const newState = {
+      channelId: "create123",
+      guildId,
+      member: {
+        id: userId,
+        user: { username: "testuser" },
+        guild: { id: guildId },
+      },
+    };
+
+    // Emit the voiceStateUpdate event
+    const { emitEvent } = await createMockCtx({ pluginName: "adb-plugin-tempvoice" });
+    await emitEvent("voiceStateUpdate", oldState, newState);
+
+    // Check that a temp voice channel was created and stored in DB
+    const channelDoc = await TempVoiceChannelModel.findOne({ guildId, creatorId: userId });
+    assert.ok(channelDoc !== null);
+    assert.ok(channelDoc.channelId === "newchannel1");
+    // Clean up
+    ctx.client.guilds.cache.get = originalGet;
+  }
+
+  // 5. Cron-driven cleanup of stale channels
+  {
+    // We need to invoke the cron callback that was captured during load
+    assert.ok(cronCallback !== null, "Cron callback should have been captured");
+
+    // Set up a stale channel (deleteAt in the past)
+    const TempVoiceChannelModel = ctx.models.get("plugin_adb-plugin-tempvoice_TempVoiceChannel");
+    const staleTime = Date.now() - 10000; // 10 seconds ago
+    await TempVoiceChannelModel.create({
+      guildId: "test-guild",
+      channelId: "stale1",
+      creatorId: userId,
+      deleteAt: staleTime,
+    });
+
+    // Mock guild and channel for the cron callback
+    const guild = {
+      id: "test-guild",
+      channels: {
+        fetch: async (channelId) => {
+          if (channelId === "stale1") {
+            return { id: "stale1", members: { size: 0 }, deletable: true, delete: async () => {} };
+          }
+          return null;
+        },
+      },
+    };
+    const originalGet = ctx.client.guilds.cache.get;
+    ctx.client.guilds.cache.get = (id) => (id === "test-guild" ? guild : null);
+
+    // Call the cron callback
+    await cronCallback();
+
+    // Check that the stale channel was deleted from DB
+    const staleDoc = await TempVoiceChannelModel.findOne({ channelId: "stale1" });
+    assert.ok(staleDoc === null, "Stale channel should have been deleted");
+
+    // Restore
+    ctx.client.guilds.cache.get = originalGet;
+  }
+
+  console.log("OK: all local-harness checks passed");
+}
+
+main().catch((error) => {
+  console.error("Local harness failed:", error);
+  process.exit(1);
+});

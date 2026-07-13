@@ -1,0 +1,68 @@
+{
+ "name": "adb-plugin-tempvoice",
+ "displayName": "Temp Voice Channels",
+ "version": "1.0.0",
+ "description": "Automatically creates and manages temporary voice channels when users join a designated channel (e.g., 'Create Channel').
+Features:
+- Automatic channel creation on join
+- Configurable templates, category, and auto-delete delay
+- Commands: setup, name, limit, lock, unlock, permit, deny, claim, rename, twbitrate",
+ "author": "DeadIndian",
+ "main": "index.js",
+ "requiresRestart": false,
+ "permissions": [
+ "db.read",
+ "db.write",
+ "commands.register",
+ "manageChannels"
+ ],
+ "discordPermissions": [
+ "ManageChannels",
+ "SendMessages"
+ ],
+ "configSchema": {
+ "type": "object",
+ "properties": {
+ "creationChannelId": {
+ "type": "string",
+ "default": null,
+ "description": "Discord snowflake ID of the designated voice channel where temporary voice channels are spawned"
+ },
+ "categoryId": {
+ "type": "string",
+ "default": null,
+ "description": "Discord snowflake ID of the category where temporary channels are created"
+ },
+ "nameTemplate": {
+ "type": "string",
+ "default": "{username}'s channel",
+ "description": "Template for temporary channel names. Must include {username} or {user}."
+ },
+ "autoDeleteDelay": {
+ "type": "number",
+ "default": 30,
+ "description": "Delay in minutes before empty temporary channels are auto-deleted"
+ },
+ "maxChannels": {
+ "type": "number",
+ "default": 0,
+ "description": "Maximum number of temporary channels allowed per guild (0 = unlimited)"
+ },
+ "bitrateDefault": {
+ "type": "number",
+ "default": 64000,
+ "minimum": 8000,
+ "maximum": 384000,
+ "description": "Default bitrate for new temporary channels (bps)"
+ },
+ "userLimitDefault": {
+ "type": "number",
+ "default": 0,
+ "minimum": 0,
+ "maximum": 99,
+ "description": "Default user limit for temporary channels (0 = none)"
+ }
+ },
+ "required": []
+ }
+}
