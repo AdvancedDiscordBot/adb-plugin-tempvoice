@@ -1,21 +1,51 @@
 {
   "name": "adb-plugin-tempvoice",
   "displayName": "Temp Voice Channels",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Automatically creates and manages temporary voice channels when users join a designated channel (e.g., 'Create Channel').\nFeatures:\n- Automatic channel creation on join\n- Configurable templates, category, and auto-delete delay\n- Commands: setup, name, limit, lock, unlock, permit, deny, claim, rename, bitrate",
   "author": "DeadIndian",
   "main": "index.js",
   "requiresRestart": false,
-  "permissions": [
-    "db.read",
-    "db.write",
-    "commands.register",
-    "manageChannels"
-  ],
-  "discordPermissions": [
-    "ManageChannels",
-    "SendMessages"
-  ],
+  "manifestVersion": 2,
+  "process": {
+    "model": "persistent",
+    "maxExecutionMs": 15000,
+    "memoryMb": 256,
+    "persistentReason": "Runs un-isolated (system:raw-client) to create and manage voice channels on voiceStateUpdate events (guild.channels.create, channel.edit, channel.delete), and to enforce permissions and bitrate — the guild.channels API and voice state inspection are outside the sandboxed RPC surface."
+  },
+  "capabilities": {
+    "system": ["raw-client"],
+    "storage": ["own-collection"],
+    "discord": ["ManageChannels", "SendMessages", "Connect", "MoveMembers"]
+  },
+  "permissions": {
+    "system": ["raw-client"],
+    "storage": ["own-collection"],
+    "discord": ["ManageChannels", "SendMessages", "Connect", "MoveMembers"],
+    "hooks": ["subscribe"],
+    "network": { "outbound": [] },
+    "filesystem": { "read": [], "write": [] },
+    "childProcess": false,
+    "nativeAddons": false
+  },
+  "declaredDependencies": [{ "package": "node-cron", "version": "^4.6.0" }],
+  "discordPermissions": ["ManageChannels", "SendMessages"],
+  "engines": {
+    "core": ">=2.0.0",
+    "plugins": { "administration": ">=2.0.0" }
+  },
+  "settings": {
+    "commandPermissions": true,
+    "schema": [
+      { "key": "creationChannelId", "type": "channel", "label": "Join-to-create channel" },
+      { "key": "categoryId", "type": "string", "label": "Temp VC category ID" },
+      { "key": "nameTemplate", "type": "string", "label": "Channel name template" },
+      { "key": "autoDeleteDelay", "type": "number", "label": "Auto-delete delay (minutes)" },
+      { "key": "maxChannels", "type": "number", "label": "Max temp channels" },
+      { "key": "bitrateDefault", "type": "number", "label": "Default bitrate" },
+      { "key": "userLimitDefault", "type": "number", "label": "Default user limit" }
+    ]
+  },
   "configSchema": {
     "type": "object",
     "properties": {
