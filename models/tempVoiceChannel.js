@@ -29,6 +29,14 @@ module.exports = new Schema({
 		index: true
 	},
 
+	// Same value as creatorId; duplicated so the platform's member-scope
+	// query ({guildId, userId}) can find a member's own channels.
+	userId: {
+		type: String,
+		default: null,
+		index: true
+	},
+
 	// Timestamp of creation
 	createdAt: {
 		type: Date,

@@ -115,6 +115,7 @@ async function load(ctx) {
           guildId,
           channelId: channel.id,
           creatorId: member.user.id,
+          userId: member.user.id,
           createdAt: new Date(),
           deleteAt: new Date(Date.now() + config.autoDeleteDelay * 60 * 1000),
           locked: false,

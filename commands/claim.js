@@ -39,6 +39,7 @@ module.exports = {
 
  // Update DB: change owner to current user.
  channelDoc.creatorId = interaction.user.id;
+ channelDoc.userId = interaction.user.id;
  await channelDoc.save();
 
  // Update channel permissions: grant current user full permissions.

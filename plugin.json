@@ -1,7 +1,7 @@
 {
   "name": "adb-plugin-tempvoice",
   "displayName": "Temp Voice Channels",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Automatically creates and manages temporary voice channels when users join a designated channel (e.g., 'Create Channel').\nFeatures:\n- Automatic channel creation on join\n- Configurable templates, category, and auto-delete delay\n- Commands: setup, name, limit, lock, unlock, permit, deny, claim, rename, bitrate",
   "author": "DeadIndian",
   "main": "index.js",
@@ -30,6 +30,27 @@
   },
   "declaredDependencies": [{ "package": "node-cron", "version": "^4.6.0" }],
   "discordPermissions": ["ManageChannels", "SendMessages"],
+  "webUi": {
+    "memberPages": [
+      {
+        "path": "/me/channels",
+        "label": "My Temp Channels",
+        "icon": "Mic",
+        "source": {
+          "model": "TempVoiceChannel",
+          "scope": "member",
+          "sort": { "createdAt": -1 },
+          "limit": 50
+        },
+        "view": {
+          "type": "list",
+          "title": "channelId",
+          "badge": "locked",
+          "empty": "You have no active temp voice channels in this server."
+        }
+      }
+    ]
+  },
   "engines": {
     "core": ">=2.0.0",
     "plugins": { "administration": ">=2.0.0" }
