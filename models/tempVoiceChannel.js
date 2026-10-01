@@ -22,7 +22,7 @@ module.exports = new Schema({
 		index: true
 	},
 
-	// User who created this channel
+	// Current owner (also updated when the channel is claimed)
 	creatorId: {
 		type: String,
 		required: true,
@@ -50,10 +50,25 @@ module.exports = new Schema({
 		default: null
 	},
 
-	// Lock status (prevent invite spam)
+	// Only empty channels have a deadline. Mongo must not TTL-delete tracking rows.
+	deleteAt: {
+		type: Date,
+		default: null,
+		index: true
+	},
+	pendingCleanup: {
+		type: Boolean,
+		default: false
+	},
+
+	// Preserve @everyone's Connect setting across lock/unlock.
 	locked: {
 		type: Boolean,
 		default: false
+	},
+	previousConnect: {
+		type: Boolean,
+		default: null
 	},
 
 	// Current user limit (discord max 99)
@@ -81,6 +96,12 @@ module.exports = new Schema({
 	disallowedUsers: [{
 		type: String
 	}],
+	allowedRoles: [{
+		type: String
+	}],
+	disallowedRoles: [{
+		type: String
+	}],
 
 	// Last time someone joined (used for idle timeout)
 	lastActiveAt: {
@@ -91,10 +112,5 @@ module.exports = new Schema({
 	timestamps: {
 		createdAt: "createdAt",
 		updatedAt: "lastActiveAt"
-	},
-	// TTL index for auto-cleanup (fallback)
-	index: {
-		lastActiveAt: 1,
-		expireAfterSeconds: 60 * 60 * 24 * 7 // 7 days idle max
 	}
 });

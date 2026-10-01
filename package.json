@@ -1,6 +1,6 @@
 {
   "name": "adb-plugin-tempvoice",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Automatic temporary voice channels for ADB — join-to-create, configurable templates, permissions, and auto-delete.",
   "main": "index.js",
   "files": [
@@ -8,6 +8,7 @@
     "plugin.json",
     "commands",
     "models",
+    "lib",
     "README.md",
     "LICENSE"
   ],

@@ -1,105 +1,177 @@
-# adb-plugin-template
+# ADB Temp Voice Channels
 
-Clean starting point for building an external (npm-installable) plugin for
-[Advanced Discord Bot](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot) (ADB).
+Join a designated voice channel to create a temporary room and move into it.
+Room owners can manage access, rename their room, or claim an abandoned room
+using `/voice`. Empty rooms are deleted after a configurable delay.
 
-See `adb-plugin-reminders` (sibling repo) for a complete, working example built from this template.
+An external plugin for [Advanced Discord Bot](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot).
 
-## Use this template
+## Setup
 
-1. Copy this folder / use as a GitHub template repo, rename it to `adb-plugin-<your-name>`.
-2. Find-and-replace `adb-plugin-REPLACE_ME` with your real package name in `plugin.json` and `package.json`.
-3. **Naming rule**: the package name (and the folder name, if run as a local plugin) must start with `adb-plugin-` — that's the exact string `PluginManager` scans `node_modules/` for.
-4. Implement your feature in `index.js` / `commands/` / `models/`.
-5. Update this README.
+1. Install `adb-plugin-tempvoice` in your ADB installation and enable the plugin.
+2. Grant the bot the permissions below and ensure ADB uses the `Guilds` and
+   `GuildVoiceStates` gateway intents.
+3. Run `/voice setup creation-channel:<voice channel> category:<category>` as a
+   member with **Manage Channels**. A category is optional; without one, rooms
+   are created at the server root.
+4. Join the configured creation channel. The bot creates a room, records its
+   owner, and moves that member into it.
 
-## Plugin contract
+The plugin retains its existing `system:raw-client` declaration. It uses the
+raw Discord.js v14 guild/voice APIs and its own `node-cron` task; it does not
+require broader permissions or isolation changes for any other plugin.
 
-Every plugin's entry file (default `index.js`) must export:
+## Command Migration
 
-```js
-async function load(ctx) { /* ... */ }
-module.exports = { load };
-```
+**Interface change:** the old standalone commands are now subcommands of
+`/voice`. No global aliases are registered, so tempvoice no longer competes with
+moderation's `/lock` and `/unlock` or other plugins' generic command names.
 
-`PluginManager` calls `load(ctx)` once at startup (or on hot-reload). Errors thrown here disable just this plugin — they don't crash the bot.
+| Previous Command | Replacement | Access and Behavior |
+| --- | --- | --- |
+| `/setup` | `/voice setup` | Manage Channels; view settings or update supplied defaults |
+| `/setup-category` | `/voice setup-category category:<category>` | Manage Channels; category for new rooms |
+| `/name` | `/voice name template:<template>` | Manage Channels; naming template for new rooms |
+| `/limit` | `/voice limit limit:<0-99>` | Manage Channels; user limit for new rooms |
+| `/bitrate` | `/voice bitrate bitrate:<bps>` | Manage Channels; bitrate for new rooms |
+| `/lock` | `/voice lock [channel] [lock]` | Owner or Manage Channels; deny @everyone Connect |
+| `/unlock` | `/voice unlock [channel]` | Owner or Manage Channels; restore the previous Connect setting |
+| `/rename` | `/voice rename name:<name> [channel]` | Owner or Manage Channels; rename an existing room |
+| `/permit` | `/voice permit user:<user> [channel]` or `role:<role>` | Owner or Manage Channels; allow future access |
+| `/deny` | `/voice deny user:<user> [channel]` or `role:<role>` | Owner or Manage Channels; deny future access |
+| `/claim` | `/voice claim [channel]` | A member currently in the room; the previous owner must be absent unless the claimant has Manage Channels |
 
-## `ctx` API reference
+All room controls default to the caller's **current voice channel**, never the
+text channel where the command was invoked. They only operate on tracked rooms
+in the interaction's guild. Ordinary owners do not need Manage Channels.
 
-| Member | What it is |
-|---|---|
-| `ctx.client` | Raw discord.js `Client` — full Discord API access |
-| `ctx.db` | Core `Database` singleton (server config, user profiles, etc.) |
-| `ctx.commands` | Live `Collection` of all registered commands |
-| `ctx.registerCommand(command)` | Register a `{ data, execute }` slash command |
-| `ctx.overrideCommand(name, (originalExecute, command) => newExecute)` | Wrap an existing command (yours or core's) |
-| `ctx.registerEvent(eventName, handler, { once? })` | Listen to a discord.js client event |
-| `ctx.defineModel(modelName, mongooseSchema)` | Compile a Mongo model namespaced as `plugin_<your-plugin-name>_<modelName>` |
-| `ctx.hooks.on(hookName, handler, priority?)` / `ctx.hooks.emitHook(hookName, payload)` | Bot lifecycle hook bus (`onPluginLoad`, `onPluginUnload`, `onLevelUp`, etc. — see ADB's `PLUGINS-ROADMAP.md`) |
-| `ctx.config.env` | Read-only `process.env` |
-| `ctx.logger` | `.info()` / `.warn()` / `.error()`, namespaced to your plugin |
+`name`, `limit`, and `bitrate` retain their original server-default semantics;
+they do not edit the caller's current room. Use `rename` to rename a room.
+`lock` now defaults to **lock**, not toggle; repeated calls are idempotent.
+`lock:false` is equivalent to `unlock`. Locking blocks joins, not departures,
+and preserves explicit member/role permits and Discord administrator bypasses.
+Unlocking restores the prior @everyone Connect override, not universal access.
 
-**Gotcha**: `ctx.scheduler` exists (it's the bot's internal `TaskScheduler`) but has **no generic `.schedule(name, cron, fn)` method** — some ADB docs claim otherwise. If you need a periodic job, bundle your own `node-cron` dependency and call `cron.schedule(...)` directly inside `load()`, same as ADB core does internally.
+Permit and deny require **exactly one** user or role. Roles remain role
+overwrites, not snapshots of their members. Deny cannot target the owner, the
+bot, a role held by the bot, or @everyone. It does not kick existing occupants.
+Discord's normal overwrite precedence still applies, including explicit member
+allows taking precedence over role denies.
 
-## `plugin.json` fields
+Claiming transfers both `creatorId` and the member-dashboard `userId`, grants
+the new owner's View Channel/Connect/Speak access, and removes the previous
+owner's member overwrite. Self-claim is a no-op. Manage Channels users can
+override a present owner, but must also be in the room.
 
-| Field | Required | Notes |
-|---|---|---|
-| `name` | yes | must start with `adb-plugin-` |
-| `version` | yes | semver |
-| `description` | yes | |
-| `author` | yes | |
-| `main` | no | defaults to `index.js` |
-| `displayName` | no | shown in marketplace UI |
-| `requiresRestart` | no | `true` disables hot-reload eligibility |
-| `port` | no | declares a plugin-owned web dashboard port (see main repo's `CREATE-PLUGIN.md` for the fastify pattern) |
-| `configSchema` | no | JSON Schema → auto-generated per-guild settings UI in the dashboard, read via `ctx.db.getPluginConfig(guildId, pluginName)` |
-| `permissions` | no | declared for the marketplace install prompt (`db.read`, `db.write`, `commands.register`, `commands.override`, `scheduler`, ...) |
+When upgrading from the previous implementation, restart ADB once so its
+cached Mongoose models pick up the new lifecycle fields, then redeploy slash
+commands using ADB's normal command deployment process. Review any custom
+dashboard command policy for the new `/voice` root; old standalone command
+policies are not automatically translated. No deployment is performed by the
+local test harness.
 
-## Local testing (no bot, no Mongo required)
+## Configuration
+
+Slash commands, voice events, and cleanup all read the same
+`ctx.db.getPluginConfig(guildId, "adb-plugin-tempvoice").data` used by the
+dashboard. Updates preserve unrelated fields, including reserved `_commands`
+settings. Configuration and channel models are injected from `load(ctx)`;
+commands never assume the bot passes a plugin context as their second argument.
+
+| Setting | Default | Validation |
+| --- | --- | --- |
+| `creationChannelId` | `null` | Voice channel (type 2) in this guild; `null` disables new creation |
+| `categoryId` | `null` | Category (type 4) in this guild; `null` selects the server root |
+| `nameTemplate` | `{username}'s channel` | 1-100 characters containing `{username}` or `{user}` |
+| `autoDeleteDelay` | `30` | Whole minutes, non-negative and within the supported date range; **0 disables auto-delete** |
+| `maxChannels` | `0` | Non-negative safe integer; 0 removes the plugin limit, not Discord's guild limits |
+| `bitrateDefault` | `64000` | Whole bps, 8000-384000; commands reject values above the current guild tier |
+| `userLimitDefault` | `0` | Integer from 0 to 99; 0 means unlimited |
+
+`/voice setup` accepts `creation-channel`, `category`, `name-template`,
+`auto-delete-minutes`, `max-channels`, `bitrate`, and `user-limit`. Omitted
+options keep existing values. With no options it displays the current settings.
+Dashboard values are also validated before creation; invalid settings or
+missing/wrong-type channels fail closed rather than creating rooms elsewhere.
+Valid saved bitrates are capped to the guild's current maximum when creating
+a room, so a later boost-tier downgrade does not break creation.
+
+`{username}` renders the plain username. `{user}` now renders the member's
+display name, rather than a literal mention (voice channel names do not render
+mentions). Substitutions are literal; the final name is trimmed and capped at
+100 characters.
+
+For installations with persisted `TempVoiceConfig` rows, settings are imported
+into `PluginConfig.data` on first use **only if no tempvoice settings already
+exist there**. Reserved or unrelated fields alone do not prevent import.
+Existing values, including the legacy 10-minute deletion default, are retained.
+Canonical settings always win, including an explicitly disabled creation
+channel. The legacy collection is not deleted or used for new writes.
+
+## Permissions
+
+The bot needs **View Channel, Connect, Speak, Move Members, Manage Channels,
+Manage Roles**, and **Send Messages**. Effective channel/category overwrites
+must allow these operations as well. Manage Roles is needed for access
+overwrites, not for handing out server roles.
+
+Creation checks the source and destination permissions before creating a room.
+Category overwrites are copied, and member-specific View Channel/Connect/Speak
+access is granted to the creator and bot. Owners are **not** granted Discord
+Manage Channels; the plugin authorizes their `/voice` operations itself.
+
+## Lifecycle and Recovery
+
+- Successful creation is tracked before moving the creator, with no deletion
+  deadline while occupied. Bots, mute/deafen updates, stale joins, and duplicate
+  concurrent join events do not create extra rooms.
+- A per-guild queue serializes creation, commands, and cleanup so concurrent
+  joins cannot bypass `maxChannels` and concurrent claims see the latest owner.
+- The last departure starts the deletion delay. A rejoin clears it. Changing
+  the delay applies to the next empty period; setting it to 0 also cancels
+  pending normal deletion on the next reconciliation.
+- A 30-second task reconciles tracked rooms after restart, starts missing
+  empty-room deadlines, and deletes expired rooms only if still empty and
+  deletable. It checks voice states as well as cached members, and skips
+  unavailable guilds or a disconnected client.
+- A missing guild, cache miss, or Discord permission/network error does not
+  discard tracking. A confirmed missing Discord channel does. Cleanup continues
+  for existing rooms after join-to-create is disabled.
+- Create, tracking, or move failures roll back empty created rooms. If deletion
+  cannot complete or the room has occupants, a pending-cleanup row is retained
+  or created for safe retry once empty, even when normal auto-delete is disabled.
+  If both Discord rollback and database persistence fail, the error log includes
+  the channel ID for manual recovery.
+- Permission/ownership changes restore the prior Discord overwrites if database
+  persistence fails. Failed compensation is logged; no success is reported.
+- Unload stops and destroys this plugin's cron, removes its unload hook, rejects
+  new work, and waits for in-flight guild operations. In-flight creation is
+  rolled back if unload happens before the move.
+
+Deletion deadlines are persisted in the channel schema; there is no Mongo TTL
+that could silently remove tracking while leaving a Discord channel behind.
+
+## Local Tests
 
 ```bash
 npm install
 npm test
 ```
 
-`test/local-harness.js` loads your plugin against `test/mock-ctx.js` — a fake in-memory `ctx` — and exercises registered commands directly. Extend both files as you add features. This catches logic bugs fast; it does **not** replace a real smoke test (see below).
+The harness loads the public `load(ctx)` entrypoint with a frozen, bot-faithful
+context, passes a raw client to registered commands, uses actual Discord.js
+`VoiceState` instances and v14-shaped channel managers, and applies real
+Mongoose schema casting/validation to its in-memory store. Cron is driven
+manually. No bot login, MongoDB, `.env`, or live services are needed.
 
-## Testing inside a real bot
-
-1. Have a working local checkout of Advanced Discord Bot.
-2. Symlink or copy your plugin folder into its `plugins/` directory:
-   ```bash
-   ln -s $(pwd) /path/to/Advanced-Discord-Bot/plugins/adb-plugin-yourname
-   ```
-   or, to test the actual `node_modules/adb-plugin-*` discovery path a real npm install would use:
-   ```bash
-   npm link
-   cd /path/to/Advanced-Discord-Bot && npm link adb-plugin-yourname
-   ```
-3. Start the bot, confirm your plugin's load-log line appears.
-4. If you added slash commands, run `npm run deploy` in the bot repo — command *logic* hot-reloads, but Discord command *registration* needs an explicit deploy.
-5. Exercise the feature for real in a Discord server.
-
-## Publishing to npm
-
-```bash
-npm login
-npm publish
-```
-
-Anyone installs it with `npm install adb-plugin-yourname` into their bot's root — ADB's `PluginManager` auto-discovers any `node_modules/adb-plugin-*` folder containing a `plugin.json`.
-
-## Listing on the ADB plugin registry (optional)
-
-See `REGISTRY-SETUP.md` in the main ADB repo — fork the registry repo, add an entry to `plugins.json` with your `npmPackage` name, open a PR.
+Tests cover registration, setup/defaults and legacy import, authorization,
+limits and permissions, creation/movement rollback, occupancy and restart
+cleanup, owner controls and claims, concurrency, and unload/reload. These
+offline tests do not replace a deployment smoke test in a Discord test guild.
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0**. See the [LICENSE](LICENSE) file for details.
-
-This repository follows the policies of the main ADB project.
-
-- **Contribution Guidelines**: [CONTRIBUTING.md](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot/blob/main/CONTRIBUTING.md)
-- **Code of Conduct**: [CODE_OF_CONDUCT.md](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot/blob/main/CODE_OF_CONDUCT.md)
-- **Security Policy**: [SECURITY.md](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot/blob/main/SECURITY.md)
+See [LICENSE](LICENSE). This repository follows ADB's
+[contribution guidelines](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot/blob/main/CONTRIBUTING.md),
+[code of conduct](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot/blob/main/CODE_OF_CONDUCT.md),
+and [security policy](https://github.com/AdvancedDiscordBot/Advanced-Discord-Bot/blob/main/SECURITY.md).

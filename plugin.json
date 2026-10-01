@@ -1,11 +1,11 @@
 {
   "name": "adb-plugin-tempvoice",
   "displayName": "Temp Voice Channels",
-  "version": "1.2.0",
-  "description": "Automatically creates and manages temporary voice channels when users join a designated channel (e.g., 'Create Channel').\nFeatures:\n- Automatic channel creation on join\n- Configurable templates, category, and auto-delete delay\n- Commands: setup, name, limit, lock, unlock, permit, deny, claim, rename, bitrate",
+  "version": "1.2.1",
+  "description": "Join-to-create temporary voice channels with configurable defaults, owner controls under /voice, and occupancy-aware cleanup.",
   "author": "DeadIndian",
   "main": "index.js",
-  "requiresRestart": false,
+  "requiresRestart": true,
   "manifestVersion": 2,
   "process": {
     "model": "persistent",
@@ -16,12 +16,13 @@
   "capabilities": {
     "system": ["raw-client"],
     "storage": ["own-collection"],
-    "discord": ["ManageChannels", "SendMessages", "Connect", "MoveMembers"]
+    "discord": ["ManageChannels", "ManageRoles", "ViewChannel", "SendMessages", "Connect", "Speak", "MoveMembers"],
+    "hooks": ["subscribe"]
   },
   "permissions": {
     "system": ["raw-client"],
     "storage": ["own-collection"],
-    "discord": ["ManageChannels", "SendMessages", "Connect", "MoveMembers"],
+    "discord": ["ManageChannels", "ManageRoles", "ViewChannel", "SendMessages", "Connect", "Speak", "MoveMembers"],
     "hooks": ["subscribe"],
     "network": { "outbound": [] },
     "filesystem": { "read": [], "write": [] },
@@ -29,7 +30,7 @@
     "nativeAddons": false
   },
   "declaredDependencies": [{ "package": "node-cron", "version": "^4.6.0" }],
-  "discordPermissions": ["ManageChannels", "SendMessages"],
+  "discordPermissions": ["ManageChannels", "ManageRoles", "ViewChannel", "SendMessages", "Connect", "Speak", "MoveMembers"],
   "webUi": {
     "memberPages": [
       {
@@ -71,39 +72,44 @@
     "type": "object",
     "properties": {
       "creationChannelId": {
-        "type": "string",
+        "type": ["string", "null"],
         "default": null,
         "description": "Discord snowflake ID of the designated voice channel where temporary voice channels are spawned"
       },
       "categoryId": {
-        "type": "string",
+        "type": ["string", "null"],
         "default": null,
         "description": "Discord snowflake ID of the category where temporary channels are created"
       },
       "nameTemplate": {
         "type": "string",
         "default": "{username}'s channel",
+        "minLength": 1,
+        "maxLength": 100,
+        "pattern": "\\{(?:username|user)\\}",
         "description": "Template for temporary channel names. Must include {username} or {user}."
       },
       "autoDeleteDelay": {
-        "type": "number",
+        "type": "integer",
         "default": 30,
-        "description": "Delay in minutes before empty temporary channels are auto-deleted"
+        "minimum": 0,
+        "description": "Delay in minutes before empty temporary channels are auto-deleted (0 = disabled)"
       },
       "maxChannels": {
-        "type": "number",
+        "type": "integer",
         "default": 0,
+        "minimum": 0,
         "description": "Maximum number of temporary channels allowed per guild (0 = unlimited)"
       },
       "bitrateDefault": {
-        "type": "number",
+        "type": "integer",
         "default": 64000,
         "minimum": 8000,
         "maximum": 384000,
-        "description": "Default bitrate for new temporary channels (bps)"
+        "description": "Default bitrate for new temporary channels (bps), capped by the guild's current tier"
       },
       "userLimitDefault": {
-        "type": "number",
+        "type": "integer",
         "default": 0,
         "minimum": 0,
         "maximum": 99,

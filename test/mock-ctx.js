@@ -34,30 +34,23 @@
 // mirroring mongoose so tests see the same documents the bot would persist.
 function createFakeModel(fullName, schema) {
 	const store = [];
-	let idCounter = 1;
-
-	// Extract simple `default` values from the schema definition (schema.obj).
-	const defaults = {};
-	const shapeObj = schema && (schema.obj || (schema.tree && schema.tree));
-	if (shapeObj) {
-		for (const [field, def] of Object.entries(shapeObj)) {
-			if (def && typeof def === "object" && "default" in def) {
-				defaults[field] = def.default;
-			}
-		}
-	}
-	function applyDefaults(doc) {
-		for (const [field, val] of Object.entries(defaults)) {
-			if (doc[field] === undefined) {
-				doc[field] = typeof val === "function" ? val() : val;
-			}
-		}
-		return doc;
-	}
+	// Real schema casting catches missing fields without opening a Mongo connection.
+	const { Mongoose } = require("mongoose");
+	const Document = new Mongoose().model(fullName, schema);
 
 	const matches = (doc, query = {}) =>
 		Object.keys(query).every((k) => {
 			if (k === "_id") return String(doc._id) === String(query[k]);
+			if (query[k] && typeof query[k] === "object" && !(query[k] instanceof Date)) {
+				return Object.entries(query[k]).every(([op, value]) => {
+					if (op === "$lte") return doc[k] != null && doc[k] <= value;
+					if (op === "$ne") return value === null ? doc[k] != null : doc[k] !== value;
+					if (op === "$exists") return (doc[k] !== undefined) === value;
+					throw new Error(`Unsupported fake query operator: ${op}`);
+				});
+			}
+			if (query[k] === null) return doc[k] == null;
+			if (query[k] instanceof Date) return +doc[k] === +query[k];
 			return doc[k] === query[k];
 		});
 
@@ -104,10 +97,16 @@ function createFakeModel(fullName, schema) {
 	}
 
 	function wrapDoc(doc) {
-		// Give each stored doc a save() like a mongoose document.
+		doc = new Document(doc).toObject();
+		// Reads are detached: mutating a document is not a successful database write.
 		Object.defineProperty(doc, "save", {
 			value: async function () {
-				if (!store.includes(doc)) store.push(doc);
+				const cast = new Document(doc);
+				await cast.validate();
+				const saved = cast.toObject();
+				const index = store.findIndex((entry) => String(entry._id) === String(doc._id));
+				if (index < 0) store.push(saved);
+				else store[index] = saved;
 				return doc;
 			},
 			enumerable: false,
@@ -118,41 +117,43 @@ function createFakeModel(fullName, schema) {
 	const model = {
 		modelName: fullName,
 		find(q = {}) {
-			return query(() => store.filter((d) => matches(d, q)));
+			return query(() => store.filter((d) => matches(d, q)).map(wrapDoc));
 		},
 		findOne(q = {}) {
-			return query(() => store.find((d) => matches(d, q)) || null);
+			return query(() => {
+				const doc = store.find((d) => matches(d, q));
+				return doc ? wrapDoc(doc) : null;
+			});
 		},
 		findById(id) {
-			return query(() => store.find((d) => String(d._id) === String(id)) || null);
+			return model.findOne({ _id: id });
 		},
 		async findOneAndUpdate(q = {}, update = {}, opts = {}) {
-			let doc = store.find((d) => matches(d, q));
+			let doc = await model.findOne(q);
+			const before = doc ? wrapDoc(doc) : null;
 			if (!doc && opts.upsert) {
-				doc = wrapDoc(applyDefaults({ _id: idCounter++, ...q }));
-				store.push(doc);
+				doc = wrapDoc(q);
 			}
 			if (!doc) return null;
 			applyUpdate(doc, update);
-			return opts.new === false ? doc : doc;
+			await doc.save();
+			return opts.new ? doc : before;
 		},
 		async updateOne(q = {}, update = {}, opts = {}) {
-			let doc = store.find((d) => matches(d, q));
-			if (!doc && opts.upsert) {
-				doc = wrapDoc(applyDefaults({ _id: idCounter++, ...q }));
-				store.push(doc);
-			}
-			if (doc) applyUpdate(doc, update);
-			return { acknowledged: true, modifiedCount: doc ? 1 : 0 };
+			const doc = await model.findOneAndUpdate(q, update, { ...opts, new: true });
+			return { acknowledged: true, matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0 };
 		},
 		async updateMany(q = {}, update = {}) {
-			const docs = store.filter((d) => matches(d, q));
-			docs.forEach((d) => applyUpdate(d, update));
+			const docs = await model.find(q);
+			for (const doc of docs) {
+				applyUpdate(doc, update);
+				await doc.save();
+			}
 			return { acknowledged: true, modifiedCount: docs.length };
 		},
 		async create(doc) {
-			const entry = wrapDoc(applyDefaults({ _id: idCounter++, ...doc }));
-			store.push(entry);
+			const entry = wrapDoc(doc);
+			await entry.save();
 			return entry;
 		},
 		async deleteOne(q = {}) {
@@ -173,7 +174,7 @@ function createFakeModel(fullName, schema) {
 		// constructor-style: new Model(doc) then doc.save()
 		// exposed as .build() to avoid needing `new`
 		build(doc) {
-			return wrapDoc({ _id: idCounter++, ...doc });
+			return wrapDoc(doc);
 		},
 		_store: store,
 	};
@@ -272,12 +273,12 @@ function createMockCtx({ pluginName = "adb-plugin-REPLACE_ME" } = {}) {
 			if (!pluginConfigs.has(key)) {
 				pluginConfigs.set(key, { guildId, pluginName: pName, data: {} });
 			}
-			return pluginConfigs.get(key);
+			return JSON.parse(JSON.stringify(pluginConfigs.get(key)));
 		},
 		async updatePluginConfig(guildId, pName, data) {
 			const key = `${guildId}:${pName}`;
 			// real bot does $set: { data } — a full replace of `data`
-			const config = { guildId, pluginName: pName, data };
+			const config = { guildId, pluginName: pName, data: JSON.parse(JSON.stringify(data)) };
 			pluginConfigs.set(key, config);
 			return config;
 		},

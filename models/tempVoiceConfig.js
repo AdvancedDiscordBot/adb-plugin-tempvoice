@@ -3,8 +3,8 @@
 const { Schema } = require("mongoose");
 
 /**
- * Per-guild configuration for temporary voice channels.
- * All fields are self-documenting via defaults.
+ * Legacy per-guild configuration, retained only for importing existing data.
+ * New configuration lives in the dashboard's PluginConfig.data document.
  */
 module.exports = new Schema({
 	// Discord guild ID (snowflake)
